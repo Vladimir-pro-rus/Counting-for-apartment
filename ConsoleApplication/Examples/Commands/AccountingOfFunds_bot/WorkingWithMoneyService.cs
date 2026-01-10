@@ -314,8 +314,7 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
 
                     handler.GetCache<StepCache>().ClearData(); // Очищает кеш
 
-                    //Последний шаг
-                    handler.LastStepExecuted = true;
+                    handler.LastStepExecuted = true; // Последний шаг
 
                     await Helpers.Message.Send(context, context.Update, "Баланс пополнен");
                     await _navigationService.NavigateToMainMenu(context); // Возвращаем в главное меню
@@ -471,25 +470,25 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                     // Получаем файл из Telegram
                     var file = await context.BotClient.GetFile(largestPhoto.FileId);
 
-                    // 2. Формируем имя файла (уникальное, с датой и ID пользователя)
+                    // Формируем имя файла (уникальное, с датой и ID пользователя)
                     string fileName = $"check_{context.GetChatId()}_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
                     string diskPath = $"User_{context.GetChatId()}/{fileName}"; // Путь на Яндекс.Диске
 
-                    // 3. Сохраняем файл временно на сервер
+                    // Сохраняем файл временно на сервер
                     string localPath = Path.Combine(_settingsInstance.DocumentsDirectory, fileName);
                     using (var fileStream = new FileStream(localPath, FileMode.Create))
                     {
                         await context.BotClient.DownloadFile(file.FilePath, fileStream);
                     }
 
-                    // 4. Загружаем на Яндекс.Диск и получаем публичную ссылку
+                    // Загружаем на Яндекс.Диск и получаем публичную ссылку
                     var diskService = new YandexDiskService(_yandexTokenService, new HttpClient());
                     string publicLink = await diskService.UploadFileAndGetPublicLinkAsync(localPath, diskPath);
 
-                    // 5. Сохраняем ссылку в кэш, как примечание
+                    // Сохраняем ссылку в кэш, как примечание
                     handler!.GetCache<StepCache>().Note = publicLink;
 
-                    // 6. Удаляем временный файл
+                    // Удаляем временный файл
                     File.Delete(localPath);
                 }
                 catch (Exception ex)
@@ -499,7 +498,6 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                         await Helpers.Message.Send(context, context.Update, $"Ошибка загрузки чека: {ex.Message}" +
                         $"\n\nПопробуйте добавить текстовое примечание или фото чека в форматах JPEG и PNG")
                     );
-                    //handler!.RegisterNextStep(Note_Materials);
                     return;
                 }
             }
@@ -600,8 +598,7 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
 
                     handler.GetCache<StepCache>().ClearData(); // Очищает кеш
 
-                    //Последний шаг
-                    handler.LastStepExecuted = true;
+                    handler.LastStepExecuted = true; // Последний шаг
 
                     await Helpers.Message.Send(context, context.Update, "Расходы на материал учтены.");
 
@@ -758,25 +755,25 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                     // Получаем файл из Telegram
                     var file = await context.BotClient.GetFile(largestPhoto.FileId);
 
-                    // 2. Формируем имя файла (уникальное, с датой и ID пользователя)
+                    // Формируем имя файла (уникальное, с датой и ID пользователя)
                     string fileName = $"check_{context.GetChatId()}_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
                     string diskPath = $"User_{context.GetChatId()}/{fileName}"; // Путь на Яндекс.Диске
 
-                    // 3. Сохраняем файл временно на сервер
+                    // Сохраняем файл временно на сервер
                     string localPath = Path.Combine(_settingsInstance.DocumentsDirectory, fileName);
                     using (var fileStream = new FileStream(localPath, FileMode.Create))
                     {
                         await context.BotClient.DownloadFile(file.FilePath, fileStream);
                     }
 
-                    // 4. Загружаем на Яндекс.Диск и получаем публичную ссылку
+                    // Загружаем на Яндекс.Диск и получаем публичную ссылку
                     var diskService = new YandexDiskService(_yandexTokenService, new HttpClient());
                     string publicLink = await diskService.UploadFileAndGetPublicLinkAsync(localPath, diskPath);
 
-                    // 5. Сохраняем ссылку в кэш, как примечание
+                    // Сохраняем ссылку в кэш, как примечание
                     handler!.GetCache<StepCache>().Note = publicLink;
 
-                    // 6. Удаляем временный файл
+                    // Удаляем временный файл
                     File.Delete(localPath);
                 }
                 catch (Exception ex)
@@ -786,7 +783,6 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                         await Helpers.Message.Send(context, context.Update, $"Ошибка загрузки чека: {ex.Message}" +
                         $"\n\nПопробуйте добавить текстовое примечание или фото чека в форматах JPEG и PNG")
                     );
-                    //handler!.RegisterNextStep(Note_LaborCosts);
                     return;
                 }
             }
@@ -833,7 +829,6 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                         _sessionManager.AddMessageForDelete(context.GetChatId(), await Helpers.Message.Send(context, context.Update, "Ошибка: лист не найден"));
                         return;
                     }
-
 
                     // Находим первую пустую ячейку в столбце L
                     int emptyRow = 4; // начинаем с L4
@@ -888,8 +883,7 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
 
                     handler.GetCache<StepCache>().ClearData(); // Очищает кеш
 
-                    //Последний шаг
-                    handler.LastStepExecuted = true;
+                    handler.LastStepExecuted = true; // Последний шаг
 
                     await Helpers.Message.Send(context, context.Update, "Расходы на оплату труда - учтены.");
                     await _navigationService.NavigateToMainMenu(context); // Возвращаем в главное меню
