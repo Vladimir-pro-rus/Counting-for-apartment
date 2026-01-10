@@ -12,6 +12,11 @@ using PRTelegramBot.Utils;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Helpers = PRTelegramBot.Helpers;
+using System.Net.Http.Headers;
+using Microsoft.Extensions.Configuration.Json;
+using ConsoleExample.Services;
+using Telegram.Bot;
+
 
 // Работает с файлом excel.
 // Необходимо разделить логику и соблюсти SOLID
@@ -23,13 +28,19 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
         private IUserSessionManager _sessionManager;
         private FilePathsSettings _settingsInstance;
         private INavigationService _navigationService;
+        private readonly IYandexTokenService _yandexTokenService;
 
         // Определяем конструктор этого класса для создания "изоляции" пользователей друг от друга
-        public WorkingWithMoneyService(IUserSessionManager sessionManager, IOptions<FilePathsSettings> settingsOptions, INavigationService navigationService)
+        public WorkingWithMoneyService(
+            IUserSessionManager sessionManager,
+            IOptions<FilePathsSettings> settingsOptions,
+            INavigationService navigationService,
+            IYandexTokenService yandexTokenService)
         {
-            _sessionManager = sessionManager;
-            _settingsInstance = settingsOptions.Value; // Извлекаем сам объект настроек
-            _navigationService = navigationService; // Доступ к главному меню напрямую
+            _sessionManager = sessionManager; // Разделение пользователей
+            _settingsInstance = settingsOptions.Value; // Обращаемся к самому объекту настроек
+            _navigationService = navigationService; // Главное меню
+            _yandexTokenService = yandexTokenService; // Для работы с Яндекс.Диск
         }
 
         #region CustomTHeader.AddMoney
@@ -91,9 +102,9 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                     out _))
                 {
                     _sessionManager.AddMessageForDelete(context.Update.GetChatId(), await Helpers.Message.Send(context, context.Update, "Ошибка: Неверный формат даты. Используйте ДД.ММ.ГГГГ"));
-                    await _navigationService.NavigateToMainMenu(context); // Возвращаем в главное меню
+                    //await _navigationService.NavigateToMainMenu(context); // Возвращаем в главное меню
 
-                    return;
+                    return; // Прерываем выполнение, ожидаем корректный ввод
                 }
                 
                 var handler = context.Update.GetStepHandler<StepTelegram>();
@@ -108,7 +119,6 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                 Console.WriteLine($"Ошибка добавления даты: {ex.Message}");
                 _sessionManager.AddMessageForDelete(context.Update.GetChatId(), await Helpers.Message.Send(context, context.Update, "Произошла ошибка. Попробуйте снова."));
                 await _navigationService.NavigateToMainMenu(context); // Возвращаем в главное меню
-
             }
         }
 
@@ -120,7 +130,7 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
             // Записываем текст пользователя в кэш 
             handler!.GetCache<StepCache>().GoalFromUser = context.Update.Message.Text;
 
-            string msg = "Пришлите сумму пополнения, в формате: 1500";
+            string msg = "Пришлите сумму пополнения, в формате ➡ 1500";
 
             //Регистрация следующего шага с максимальным ожиданием выполнения этого шага 5 минут от момента регистрации
             handler.RegisterNextStep(CoastFromUser);
@@ -135,7 +145,10 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
             string userInput = context.Update.Message.Text;
 
             // Регулярное выражение для проверки формата суммы
-            var regex = new Regex(@"^\d+([.,]\d{1,2})?$");
+            var regex = new Regex(@"^\d+([.,]\d{1,2})?$"); // Проверяем всю строку начиная с самого начала и до её конца (^..$)
+                                                           // Должно быть число (0-9) один или более раз + 2 числа после разделителя
+                                                           // Часть числа не обязательна и может повториться 0 или 1 раз благодаря "?"
+
             if (!regex.IsMatch(userInput)) // Дословно: проверь сообщение пользователя "userInput" на совпадения с форматом из "regex",
                                            // если совпадений нет, то отработай блок "if"
             {
@@ -143,29 +156,71 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                 return; // Прерываем выполнение, ожидаем корректный ввод
             }
 
-
             // Нормализация суммы
             string normalizedSum = NormalizeSum(userInput);
             handler!.GetCache<StepCache>().CoastFromUser = normalizedSum;
 
-            string msg = "Пришлите примечание для пополнения";
-            handler.RegisterNextStep(Note);
+            string msg = "Пришлите чек вложением в формате фото, или текстовое примечание";
+
+            handler.RegisterNextStep(CreateNote);
             await Helpers.Message.Send(context, context.Update, msg);
         }
 
-        // Добавляет примечание фин.зачисления
-        public async Task Note(IBotContext context)
+        // Собирает примечание
+        public async Task CreateNote(IBotContext context)
         {
-            // Получаем текущий обработчик
             var handler = context.Update.GetStepHandler<StepTelegram>();
-            // Записываем текст пользователя в кэш 
-            handler!.GetCache<StepCache>().Note = context.Update.Message.Text;
+            string msg = "Хорошо. Вношу данные в файл учёта средств";
 
-            string msg = "Хорошо.Вношу данные в файл учёта средств";
+            // Проверяем, прислал ли пользователь ТЕКСТ
+            if (context.Update.Message?.Text != null)
+            {
+                handler!.GetCache<StepCache>().Note = context.Update.Message.Text;
+            }
+            // Проверяем, прислал ли пользователь ФОТО
+            else if (context.Update.Message?.Photo != null && context.Update.Message.Photo.Any())
+            {
+                var largestPhoto = context.Update.Message.Photo.Last();
+
+                try
+                {
+                    // Получаем файл из Telegram
+                    var file = await context.BotClient.GetFile(largestPhoto.FileId);
+
+                    // Формируем имя файла (уникальное, с датой и ID пользователя)
+                    string fileName = $"check_{context.GetChatId()}_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
+                    string diskPath = $"User_{context.GetChatId()}/{fileName}"; // Путь на Яндекс.Диске
+
+                    // Сохраняем файл временно на сервер
+                    string localPath = Path.Combine(_settingsInstance.DocumentsDirectory, fileName);
+                    using (var fileStream = new FileStream(localPath, FileMode.Create))
+                    {
+                        await context.BotClient.DownloadFile(file.FilePath, fileStream);
+                    }
+
+                    // Загружаем на Яндекс.Диск и получаем публичную ссылку
+                    var diskService = new YandexDiskService(_yandexTokenService, new HttpClient());
+                    string publicLink = await diskService.UploadFileAndGetPublicLinkAsync(localPath, diskPath);
+
+                    // Сохраняем ссылку в кэш, как примечание
+                    handler!.GetCache<StepCache>().Note = publicLink;
+
+                    // Удаляем временный файл
+                    File.Delete(localPath);
+                }
+                catch (Exception ex)
+                {
+                    _sessionManager.AddMessageForDelete(
+                        context.GetChatId(),
+                        await Helpers.Message.Send(context, context.Update, $"Ошибка загрузки чека: {ex.Message}" +
+                        $"\n\nПопробуйте добавить текстовое примечание или фото чека в форматах JPEG и PNG")
+                    );
+                    handler!.RegisterNextStep(CreateNote);
+                    return;
+                }
+            }
 
             await Helpers.Message.Send(context, context.Update, msg);
-
-            //Выполнение внесения данных в файл
             await AddData(context);
         }
 
@@ -227,6 +282,7 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                     }
                     worksheet.Cells[emptyRow, emptyCol++].Value = handler.GetCache<StepCache>().GoalFromUser; // Записали цель
 
+                    // Записываем значение суммы
                     var coastCell = worksheet.Cells[emptyRow, emptyCol++];
                     if (decimal.TryParse(handler.GetCache<StepCache>().CoastFromUser, out decimal coastValue))
                     {
@@ -238,7 +294,20 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                         coastCell.Value = handler.GetCache<StepCache>().CoastFromUser; // Если не число, сохраняем как текст
                     }
 
-                    worksheet.Cells[emptyRow, emptyCol++].Value = handler.GetCache<StepCache>().Note; // Записали примечание
+                    // Добавление примечания
+                    var userRecipt = handler.GetCache<StepCache>().Note;
+                    if (!string.IsNullOrEmpty(userRecipt))
+                    {
+                        if (Uri.TryCreate(userRecipt, UriKind.Absolute, out Uri? result) &&
+                            (result.Scheme == Uri.UriSchemeHttp || result.Scheme == Uri.UriSchemeHttps))
+                            worksheet.Cells[emptyRow, emptyCol++].Hyperlink = new ExcelHyperLink(userRecipt) { Display = "Скачать чек" };
+                        else
+                            worksheet.Cells[emptyRow, emptyCol++].Value = userRecipt;
+                    }
+                    else
+                    {
+                        _sessionManager.AddMessageForDelete(context.GetChatId(), await Helpers.Message.Send(context, "Чек недействителен"));
+                    }
 
                     // Сохраняем файл
                     package.Save();
@@ -373,7 +442,7 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
             string normalizedSum = NormalizeSum(userInput);
             handler!.GetCache<StepCache>().CoastFromUser = normalizedSum;
 
-            string msg = "Пришлите примечание для расходов";
+            string msg = "Пришлите чек вложением в формате фото, или текстовое примечание";
 
             //Регистрация следующего шага с максимальным ожиданием выполнения этого шага 5 минут от момента регистрации
             handler.RegisterNextStep(Note_Materials);
@@ -384,12 +453,56 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
         // Добавляет примечание фин.зачисления
         public async Task Note_Materials(IBotContext context)
         {
-            // Получаем текущий обработчик
             var handler = context.Update.GetStepHandler<StepTelegram>();
-            // Записываем текст пользователя в кэш 
-            handler!.GetCache<StepCache>().Note = context.Update.Message.Text;
+            string msg = "Хорошо. Вношу данные в файл учёта средств";
 
-            string msg = "Хорошо.Вношу данные в файл учёта средств";
+            // Проверяем, прислал ли пользователь ТЕКСТ
+            if (context.Update.Message?.Text != null)
+            {
+                handler!.GetCache<StepCache>().Note = context.Update.Message.Text;
+            }
+            // Проверяем, прислал ли пользователь ФОТО
+            else if (context.Update.Message?.Photo != null && context.Update.Message.Photo.Any())
+            {
+                var largestPhoto = context.Update.Message.Photo.Last();
+
+                try
+                {
+                    // Получаем файл из Telegram
+                    var file = await context.BotClient.GetFile(largestPhoto.FileId);
+
+                    // 2. Формируем имя файла (уникальное, с датой и ID пользователя)
+                    string fileName = $"check_{context.GetChatId()}_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
+                    string diskPath = $"User_{context.GetChatId()}/{fileName}"; // Путь на Яндекс.Диске
+
+                    // 3. Сохраняем файл временно на сервер
+                    string localPath = Path.Combine(_settingsInstance.DocumentsDirectory, fileName);
+                    using (var fileStream = new FileStream(localPath, FileMode.Create))
+                    {
+                        await context.BotClient.DownloadFile(file.FilePath, fileStream);
+                    }
+
+                    // 4. Загружаем на Яндекс.Диск и получаем публичную ссылку
+                    var diskService = new YandexDiskService(_yandexTokenService, new HttpClient());
+                    string publicLink = await diskService.UploadFileAndGetPublicLinkAsync(localPath, diskPath);
+
+                    // 5. Сохраняем ссылку в кэш, как примечание
+                    handler!.GetCache<StepCache>().Note = publicLink;
+
+                    // 6. Удаляем временный файл
+                    File.Delete(localPath);
+                }
+                catch (Exception ex)
+                {
+                    _sessionManager.AddMessageForDelete(
+                        context.GetChatId(),
+                        await Helpers.Message.Send(context, context.Update, $"Ошибка загрузки чека: {ex.Message}" +
+                        $"\n\nПопробуйте добавить текстовое примечание или фото чека в форматах JPEG и PNG")
+                    );
+                    //handler!.RegisterNextStep(Note_Materials);
+                    return;
+                }
+            }
 
             await Helpers.Message.Send(context, context.Update, msg);
 
@@ -467,7 +580,20 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                         coastCell.Value = handler.GetCache<StepCache>().CoastFromUser; // Если не число, сохраняем как текст
                     }
 
-                    worksheet.Cells[emptyRow, emptyCol++].Value = handler.GetCache<StepCache>().Note; // Записали примечание
+                    // Добавление примечания
+                    var userRecipt = handler.GetCache<StepCache>().Note;
+                    if (!string.IsNullOrEmpty(userRecipt))
+                    {
+                        if (Uri.TryCreate(userRecipt, UriKind.Absolute, out Uri? result) &&
+                            (result.Scheme == Uri.UriSchemeHttp || result.Scheme == Uri.UriSchemeHttps))
+                            worksheet.Cells[emptyRow, emptyCol++].Hyperlink = new ExcelHyperLink(userRecipt) { Display = "Скачать чек" };
+                        else
+                            worksheet.Cells[emptyRow, emptyCol++].Value = userRecipt;
+                    }
+                    else
+                    {
+                        _sessionManager.AddMessageForDelete(context.GetChatId(), await Helpers.Message.Send(context, "Чек недействителен"));
+                    }
 
                     // Сохраняем файл
                     package.Save();
@@ -604,7 +730,7 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
             string normalizedSum = NormalizeSum(userInput);
             handler!.GetCache<StepCache>().CoastFromUser = normalizedSum;
 
-            string msg = "Пришлите примечание";
+            string msg = "Пришлите чек вложением в формате фото, или текстовое примечание";
             //Регистрация следующего шага с максимальным ожиданием выполнения этого шага 5 минут от момента регистрации
             handler.RegisterNextStep(Note_LaborCosts);
 
@@ -614,12 +740,56 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
         // Добавляет примечание фин.зачисления
         public async Task Note_LaborCosts(IBotContext context)
         {
-            // Получаем текущий обработчик
             var handler = context.Update.GetStepHandler<StepTelegram>();
-            // Записываем текст пользователя в кэш 
-            handler!.GetCache<StepCache>().Note = context.Update.Message.Text;
+            string msg = "Хорошо. Вношу данные в файл учёта средств";
 
-            string msg = "Хорошо.Вношу данные в файл учёта средств";
+            // Проверяем, прислал ли пользователь ТЕКСТ
+            if (context.Update.Message?.Text != null)
+            {
+                handler!.GetCache<StepCache>().Note = context.Update.Message.Text;
+            }
+            // Проверяем, прислал ли пользователь ФОТО
+            else if (context.Update.Message?.Photo != null && context.Update.Message.Photo.Any())
+            {
+                var largestPhoto = context.Update.Message.Photo.Last();
+
+                try
+                {
+                    // Получаем файл из Telegram
+                    var file = await context.BotClient.GetFile(largestPhoto.FileId);
+
+                    // 2. Формируем имя файла (уникальное, с датой и ID пользователя)
+                    string fileName = $"check_{context.GetChatId()}_{DateTime.Now:yyyyMMdd_HHmmss}.jpg";
+                    string diskPath = $"User_{context.GetChatId()}/{fileName}"; // Путь на Яндекс.Диске
+
+                    // 3. Сохраняем файл временно на сервер
+                    string localPath = Path.Combine(_settingsInstance.DocumentsDirectory, fileName);
+                    using (var fileStream = new FileStream(localPath, FileMode.Create))
+                    {
+                        await context.BotClient.DownloadFile(file.FilePath, fileStream);
+                    }
+
+                    // 4. Загружаем на Яндекс.Диск и получаем публичную ссылку
+                    var diskService = new YandexDiskService(_yandexTokenService, new HttpClient());
+                    string publicLink = await diskService.UploadFileAndGetPublicLinkAsync(localPath, diskPath);
+
+                    // 5. Сохраняем ссылку в кэш, как примечание
+                    handler!.GetCache<StepCache>().Note = publicLink;
+
+                    // 6. Удаляем временный файл
+                    File.Delete(localPath);
+                }
+                catch (Exception ex)
+                {
+                    _sessionManager.AddMessageForDelete(
+                        context.GetChatId(),
+                        await Helpers.Message.Send(context, context.Update, $"Ошибка загрузки чека: {ex.Message}" +
+                        $"\n\nПопробуйте добавить текстовое примечание или фото чека в форматах JPEG и PNG")
+                    );
+                    //handler!.RegisterNextStep(Note_LaborCosts);
+                    return;
+                }
+            }
 
             await Helpers.Message.Send(context, context.Update, msg);
 
@@ -698,7 +868,20 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                         coastCell.Value = handler.GetCache<StepCache>().CoastFromUser; // Если не число, сохраняем как текст
                     }
 
-                    worksheet.Cells[emptyRow, emptyCol++].Value = handler.GetCache<StepCache>().Note; // Записали примечание
+                    // Добавление примечания
+                    var userRecipt = handler.GetCache<StepCache>().Note;
+                    if (!string.IsNullOrEmpty(userRecipt))
+                    {
+                        if (Uri.TryCreate(userRecipt, UriKind.Absolute, out Uri? result) &&
+                            (result.Scheme == Uri.UriSchemeHttp || result.Scheme == Uri.UriSchemeHttps))
+                            worksheet.Cells[emptyRow, emptyCol++].Hyperlink = new ExcelHyperLink(userRecipt) { Display = "Скачать чек" };
+                        else
+                            worksheet.Cells[emptyRow, emptyCol++].Value = userRecipt;
+                    }
+                    else
+                    {
+                        _sessionManager.AddMessageForDelete(context.GetChatId(), await Helpers.Message.Send(context, "Чек недействителен"));
+                    }
 
                     // Сохраняем файл
                     package.Save();
