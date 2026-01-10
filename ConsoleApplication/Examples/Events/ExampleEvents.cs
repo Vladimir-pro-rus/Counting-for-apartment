@@ -90,6 +90,7 @@ namespace ConsoleExample.Examples.Events
             string msg = "Пользователь отправил старт с аргументом";
             await Helpers.Message.Send(args.Context, msg);
         }
+
         public static async Task OnWrongTypeMessage(BotEventArgs e)
         {
             string msg = "Неверный тип сообщения";
