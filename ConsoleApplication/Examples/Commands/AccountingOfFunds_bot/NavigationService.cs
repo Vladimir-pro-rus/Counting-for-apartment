@@ -1,5 +1,6 @@
 ﻿// INavigationService.cs
 using ConsoleExample.Models.CommandHeaders;
+using ConsoleExample.Services;
 using Microsoft.Extensions.Options;
 using PRTelegramBot.Attributes;
 using PRTelegramBot.Extensions;
@@ -29,6 +30,7 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
             _settings = settingsOptions.Value;
         }
 
+        [ReplyMenuHandler("Старт", "/start")]
         [InlineCallbackHandler<CustomTHeader>(CustomTHeader.MainMenu)]
         public async Task NavigateToMainMenu(IBotContext context)
         {
