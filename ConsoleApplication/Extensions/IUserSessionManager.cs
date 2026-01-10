@@ -8,7 +8,6 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
     public interface IUserSessionManager // Набор методов без реализации, но с запр. переменными. Его наследователь обязан реализовать их все
     {
         void AddMessageForDelete(long chatId, Message message);
-        //List<Message> GetMessagesForDelete(long chatId);
         Task ClearMessagesForDelete(long chatId, IBotContext context);
     }
 
@@ -20,9 +19,9 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
         // Добавляет сообщение для удаления для каждого пользователя отдельно
         public void AddMessageForDelete(long chatId, Message message)
         {
-            if (!_messagesPerUser.ContainsKey(chatId)) // 
+            if (!_messagesPerUser.ContainsKey(chatId)) // Если словаря для пользователя с chatId нет, то ...
             {
-                _messagesPerUser[chatId] = new List<Message>();
+                _messagesPerUser[chatId] = new List<Message>(); // ... создаёт его 
             }
             _messagesPerUser[chatId].Add(message);
         }
@@ -51,15 +50,13 @@ namespace ConsoleExample.Examples.Commands.AccountingOfFunds_bot
                     }
                     messagesToDelete.Clear(); // После удаления всех сообщений из чата, очищаем внутренний список
                 }
-                else
+                else // Список существует, но пустой
                 {
-                    // Список существует, но пустой
                     Console.WriteLine($"Диалог с пользователем (ID: {chatId}) -> пуст. Нечего удалять.");
                 }
             }
-            else
+            else // Списка не существует для этого chatId
             {
-                // Списка не существует для этого chatId
                 Console.WriteLine($"Диалог с пользователем (ID: {chatId}) -> пуст. Список не инициализирован.");
             }
         }
